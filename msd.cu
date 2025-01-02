@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <sstream>
 #include <ctime>
+#include <cstdlib>
+#include <unistd.h>
 using namespace std;
 
 struct atom_old {
@@ -32,54 +34,106 @@ struct atom
 };
 
 
-double potim;
+double potim=0.1;
+int atom_id=0;
 const int TILE_DIM=32;
 int step=0;
+string file_name="dump.atom";
+bool h_flag=false;
 
-void read_dump(vector<atom_old>& R_old, int &atom_number,int &Li_number, int &step, double &a, double &b, double &c);
-void __global__ moving_xyz(atom *,const double,const double,const double,const int,const int);
+void read_dump(vector<atom_old>& R_old,int &atom_number,int &step,double &a,double &b,double &c);
+void __global__ moving_xyz(atom *,const double,const double,const double,const int,const int,const int);
 void __global__ MSD_cal(atom *,double *,const int,const int,const int);
 void MSD_write(double *);
 
 int main(int argc,char *argv[])
-{
-    if (argc==1)
+{   
+    int device_id=-1;
+    cudaError_t err=cudaGetDevice(&device_id);
+    if (err != cudaSuccess) 
     {
-        cout << "defult using potim:0.1 ps" << endl;
-        potim=0.1;
+        cout << "CUDA error: Unable to get current device. " << cudaGetErrorString(err) << endl;
+        return 1;
     }
-    else if (argc==2)
+    cudaDeviceProp device_prop;
+    err=cudaGetDeviceProperties(&device_prop,device_id);
+    if (err != cudaSuccess) 
     {
-        cout << "using potim: " << argv[1] << endl;
-        potim=atof(argv[1]);
+        cout << "CUDA error: Unable to get device properties. " << cudaGetErrorString(err) << endl;
+        return;
     }
+
+    cout << "Device " << device_id << ": " << device_prop.name << endl;
+    cout << "Compute capability: " << device_prop.major << "." << device_prop.minor << endl;
+    int opt;
+    while ((opt=getopt(argc,argv,"i:p:f:h"))!=-1)
+    {
+        switch (opt)
+        {
+            case 'i':
+                atom_id=atoi(optarg)-1;
+                break;
+            case 'p':
+                potim=atof(optarg);
+                break;
+            case 'f':
+                file_name=optarg;
+                break;
+            case 'h':
+                h_flag=true;
+                break;
+            default:
+                cout << "Usage: " << argv[0] << " " << "-i <Atom ID> -p <Potim> -f <File Name> -h <Help>" << endl;
+                return 1;
+        }
+    }
+
+    if (h_flag)
+    {
+        cout << "Usage: " << argv[0] << "-i <Atom ID> -p <Potim> -f <File Name> -h <Help>" << endl;
+        cout << "-i <Atom ID>: Set Atom ID(int) which will use to calculate MSD" << endl;
+        cout << "-p <Potim>: Set Potim(double) of your system, unit: ps" << endl;
+        cout << "-f <File Name>: Set name of your input dump file(string)" << endl;
+    }
+    cout << "Potim: " << potim << endl;
+    cout << "Atom_ID: " << atom_id+1 << endl;
+    cout << "File Name: " << file_name << endl;
 
     double a,b,c;
     long N,N_atom;
     int atom_number=0;
-    int Li_number=0;
     vector<atom_old> R_old;
 
     clock_t start1=clock();
-    read_dump(R_old,atom_number,Li_number,step,a,b,c); // read dump file.
+    read_dump(R_old,atom_number,step,a,b,c); // read dump file.
+    int Max=0;
+    for (int i=0;i<atom_number;i++)
+    {
+        if (R_old[i].atom_type>Max)
+            Max=R_old[i].atom_type;
+    }
     clock_t end1=clock();
+
     double duration=double(end1-start1)/CLOCKS_PER_SEC;
     cout << "Finished reading dump file, time: " << duration << " s" << endl;
 
 
     N=R_old.size(); //R and R_old size.
     N_atom=N*sizeof(atom);
-
     atom *R=new atom[N];
-
+    int number[Max+1];
+    for (int i=0;i<Max;i++) number[i]=0;
     for (int i=0;i<N;i++) //copy R_old to R.
     {
         R[i].atom_type=R_old[i].atom_type;
+        if (i<atom_number) 
+        {
+            number[R[i].atom_type]+=1;
+        }
         R[i].x=R_old[i].x;
         R[i].y=R_old[i].y;
         R[i].z=R_old[i].z;
     }
-
     int deltaT=static_cast<int>(round(0.5*step)); //delta_t size.
     int msd_size=sizeof(double)*deltaT;
     double *h_msd=new double[deltaT];
@@ -102,7 +156,7 @@ int main(int argc,char *argv[])
     CHECK(cudaEventRecord(start));
     cudaEventQuery(start);
 
-    moving_xyz<<<(N+128-1)/128,128>>>(d_R,a,b,c,atom_number,step); //moving xyz.
+    moving_xyz<<<(N+128-1)/128,128>>>(d_R,a,b,c,atom_number,step,atom_id); //moving xyz.
     cudaDeviceSynchronize();
 
     CHECK(cudaEventRecord(stop));
@@ -124,7 +178,7 @@ int main(int argc,char *argv[])
     const dim3 block_size(TILE_DIM,TILE_DIM);
     const dim3 grid_size(grid_size_x,grid_size_y);
 
-    MSD_cal<<<grid_size,block_size>>>(d_R,d_msd,step,atom_number,Li_number); //MSD calculation.
+    MSD_cal<<<grid_size,block_size>>>(d_R,d_msd,step,atom_number,number[atom_id]); //MSD calculation.
     cudaDeviceSynchronize();
 
     CHECK(cudaEventRecord(stop));
@@ -135,7 +189,7 @@ int main(int argc,char *argv[])
     CHECK(cudaEventDestroy(stop));
 //for average:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     CHECK(cudaMemcpy(h_msd,d_msd,msd_size,cudaMemcpyDeviceToHost)); // move d_msd to h_msd.
-    int n=Li_number*(static_cast<int>(0.5*step)-1);
+    int n=number[atom_id]*(static_cast<int>(0.5*step)-1);
     for (int i=0;i<deltaT;i++) 
     {
         h_msd_ave[i]=h_msd[i];
@@ -157,13 +211,14 @@ int main(int argc,char *argv[])
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
 void read_dump
-(vector<atom_old>& R_old,int &atom_number,int &Li_number,int &step,double &a,double &b,double &c)
+(vector<atom_old>& R_old,int &atom_number,int &step,double &a,double &b,double &c)
 {    
     double x_b[6];
     int total_lines=0;
     string line,word;
+    int lines;
     ifstream file;
-    file.open("dump.atom");
+    file.open(file_name);
     if (!file.is_open())
     {
         cout << "Can't open dump.atom file." << endl;
@@ -201,6 +256,15 @@ void read_dump
     a=x_b[1]-x_b[0];
     b=x_b[3]-x_b[2];
     c=x_b[5]-x_b[4];
+    getline(file,line);
+    istringstream WORDS(line);
+    if (WORDS >> word)
+    {
+        if (word=="xy")
+            lines=10;
+        else
+            lines=9;
+    }
     file.clear();
     file.seekg(0,ios::beg);
 //comfirm steps:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -209,13 +273,13 @@ void read_dump
     {
         ++total_lines;
     }
-    step=total_lines/(9+atom_number);
+    step=total_lines/(lines+atom_number);
     file.clear();
     file.seekg(0,ios::beg);
 //read xyz:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     for (int i=0;i<step;i++)
     {
-        for (int j=0;j<9;j++)
+        for (int j=0;j<lines;j++)
         {
             getline(file,line);
         }
@@ -236,7 +300,7 @@ void read_dump
                     }
                     else if (k==1)
                     {
-                        type=stoi(word);
+                        type=stoi(word)-1;
                     }
                     else if (k==2)
                     {
@@ -260,13 +324,6 @@ void read_dump
         }
     }
     sort(R_old.begin(),R_old.end());
-    for (int i=0;i<atom_number;i++)
-    {
-        if (R_old[i].atom_type==1)
-        {
-            Li_number++;
-        }
-    }
 }
 //////////////////////////////////////////////////////////////////////////
 //                                                                      //
@@ -274,10 +331,10 @@ void read_dump
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
 void __global__ moving_xyz
-(atom *d_R,const double a,const double b,const double c,const int atom_number,const int step)
+(atom *d_R,const double a,const double b,const double c,const int atom_number,const int step,const int atom_id)
 {
     const int n=blockIdx.x*blockDim.x+threadIdx.x;
-    if ((n<atom_number) && (d_R[n].atom_type==1))
+    if ((n<atom_number) && (d_R[n].atom_type==atom_id))
     {
         for (int i=0;i<step-1;i++)
         {
@@ -322,15 +379,15 @@ void __global__ moving_xyz
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
 void __global__ MSD_cal
-(atom *d_R,double *d_msd,const int step,const int atom_number,const int Li_number)
+(atom *d_R,double *d_msd,const int step,const int atom_number,const int number)
 {   
     const int n1=blockIdx.x*blockDim.x+threadIdx.x;
     const int n2=blockIdx.y*blockDim.y+threadIdx.y;
     const int delta_t=static_cast<int>(round(0.5*step));
     const int t=delta_t-1;
     if ((n1<t) && (n2<delta_t))
-    {
-        for (int i=0;i<Li_number;i++)
+    {   
+        for (int i=0;i<number;i++)
         {
             double dx=d_R[n1*atom_number+i].x-d_R[(n1+n2)*atom_number+i].x;
             dx*=dx;
