@@ -7,7 +7,7 @@ how to use:
 
 3. ./msd_gpu -i <atom id> -f <input file> -p <potim> -h for help
 
-atom id: atom id used to calculated 马上到！
+atom id: atom id used to calculated
 input file: input file name
 ppotim: unit ps
 
