@@ -1,7 +1,7 @@
 a script calculating average mean square displacement.
 
 how to use:
-1. ensure installation of CUDA
+1. ensure that you have installed CUDA and nvcc command is available. 
 
 2. make
 
