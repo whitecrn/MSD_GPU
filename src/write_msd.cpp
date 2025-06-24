@@ -1,4 +1,5 @@
-#include "data.h"
+#include "../include/write_msd.h"
+#include "../include/type.h"
 
 void MSD_write(double *h_msd_ave)
 {

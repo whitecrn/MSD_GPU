@@ -1,32 +1,17 @@
-#include "data.h"
+#include "../include/msd.h"
+#include "../include/type.h"
 
 double potim=0.1;
 int atom_id=0;
 int step=0;
 string file_name="dump.atom";
 bool h_flag=false;
+bool Cartesian=true;
 
 int main(int argc,char *argv[])
 {   
-    int device_id=-1;
-    cudaError_t err=cudaGetDevice(&device_id);
-    if (err != cudaSuccess) 
-    {
-        cout << "CUDA error: Unable to get current device. " << cudaGetErrorString(err) << endl;
-        return 1;
-    }
-    cudaDeviceProp device_prop;
-    err=cudaGetDeviceProperties(&device_prop,device_id);
-    if (err != cudaSuccess) 
-    {
-        cout << "CUDA error: Unable to get device properties. " << cudaGetErrorString(err) << endl;
-        return 1;
-    }
-
-    cout << "Device " << device_id << ": " << device_prop.name << endl;
-    cout << "Compute capability: " << device_prop.major << "." << device_prop.minor << endl;
     int opt;
-    while ((opt=getopt(argc,argv,"i:p:f:h"))!=-1)
+    while ((opt=getopt(argc,argv,"i:p:f:t:h"))!=-1)
     {
         switch (opt)
         {
@@ -39,6 +24,8 @@ int main(int argc,char *argv[])
             case 'f':
                 file_name=optarg;
                 break;
+            case 't':
+                Cartesian=atoi(optarg);
             case 'h':
                 h_flag=true;
                 break;

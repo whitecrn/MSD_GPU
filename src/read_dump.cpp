@@ -1,5 +1,6 @@
-#include "data.h"
-
+#include "../include/read_dump.h"
+#include "../include/type.h"
+extern bool Cartesian;
 void read_dump
 (vector<atom_old>& R_old,int &atom_number,int &step,double &a,double &b,double &c)
 {    
@@ -32,14 +33,8 @@ void read_dump
         {
             if (WORDS >> word)
             {
-                if (j==0)
-            {
-                x_b[i*2+j]=stod(word);
-            }
-            else if (j==1)
-            {
-                x_b[i*2+j]=stod(word);
-            }
+                if (j==0) x_b[i*2+j]=stod(word);
+                else if (j==1) x_b[i*2+j]=stod(word);
             }
         }
     }
@@ -84,27 +79,17 @@ void read_dump
             {
                 if (words >> word)
                 {
-                    if (k==0)
-                    {
-                        indices=stoi(word);
-                    }
-                    else if (k==1)
-                    {
-                        type=stoi(word)-1;
-                    }
-                    else if (k==2)
-                    {
-                        x=stod(word);
-                    }
-                    else if (k==3)
-                    {
-                        y=stod(word);
-                    }
-                    else if (k==4)
-                    {
-                        z=stod(word);
-                    }
+                    if (k==0) indices=stoi(word);
+                    else if (k==1) type=stoi(word)-1;
+                    else if (k==2) x=stod(word)-x_b[0];
+                    else if (k==3) y=stod(word)-x_b[2];
+                    else if (k==4) z=stod(word)-x_b[4];
                 }
+            }
+
+            if (!Cartesian)
+            {
+                x*=a;y*=b;z*=c;
             }
             R_old.push_back(atom_old(i,indices,type,x,y,z));
         }
